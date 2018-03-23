@@ -77,7 +77,7 @@ contains the packages - `tgrasp`, `tgrasp_msgs`
     - Pub: tgrasp/pclData2
 
 
-### Relevant topics (not including extra topics task specific):   
+### Relevant topics:   
 1. /left_finger/sai, /right_finger/sai   - FingerSAI.msg   
 2. pclData   -PclData.msg   
 3. inspector/pclData2   - PclData.msg   
@@ -113,6 +113,7 @@ The scripts `l_sensor_graphics.py` and `r_sensor_graphics.py` are purely for vis
 ### Algorithm used by touch_search.py
 The algorithm employed by the touch_search node is fairly simple yet quite robust.
 The object location information contained in the PclData centroid attributes is used as the initial coordinates to command the end effector (EE) to.
-This node constructs two search boxes on either sides (total of four) of the object centroid along the x axis. The depth of each search box is set to be the depth of the gripper. The starting search box is the initial location of the gripper as received from the PCL data. In each search box, the gripper slowly closes until the touch sensors sense a touch. If there is no touch sensed on any of the eight sensors on either of the fingers, the EE is commanded to the next search box. If any search box, if the outer sensors (sensor 4 & 5) sense touch, this is taken as an indication of outer contact. If this outer sensors are located on the left finger, the EE is commanded to move left in small increments equal to the finger width until there is no outer touch. This then is taken as an indication to move 'in' (along the y-axis) to make contact with the inner sensors. Once the inner sensors have made contact the grasp is slowly closed and the object is raised to a fixed height to claim a successful grasp!. The logic mentioned for the left gripper is applicable to the right finger as well, except that instead of moving left, it moves to the right.
+
+This node constructs two search boxes on either sides (total of four) of the object centroid along the x axis. The depth of each search box is set to be the depth of the gripper. The starting search box is the initial location of the gripper as received from the PCL data. In each search box, the gripper slowly closes until the touch sensors sense a touch. If there is no touch sensed on any of the eight sensors on either of the fingers, the EE is commanded to the next search box. If in any search box, if the outer sensors (sensor 4 & 5) sense touch, this is taken as an indication of outer contact. If this outer sensors are located on the left finger, the EE is commanded to move left in small increments equal to the finger width until there is no outer touch. This then is taken as an indication to move 'in' (along the y-axis) to make contact with the inner sensors. Once the inner sensors have made contact the grasp is slowly closed and the object is raised to a fixed height to claim a successful grasp!. The logic mentioned for the left gripper is applicable to the right finger as well, except that instead of moving left, it moves to the right.
 Once touch is sensed on the inner sensors, the algorithm checks if the object grasp can be deepened before the gripper is closed. By deepening we mean that if only the shallow sensors are touching, then we will move 'in' to make contact with the inner middle sensors. For curved objects it is very possible that only the middle sensors register a contact and that is considered as the best possible grasp depth.
 A key aspect in this implementation is to account for the noisy sensors and tune the definition of what sensor values correspond to a 'touch' or 'contact'.

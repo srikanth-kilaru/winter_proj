@@ -25,14 +25,14 @@ r_app = QtGui.QApplication(["Right finger sensors"])
 def update():
     global r_app, sai_curve1, sai_data1, sai_curve2, sai_data2,sai_curve3, sai_data3,sai_curve4, sai_data4,sai_curve5, sai_data5,sai_curve6, sai_data6,sai_curve7, sai_data7,sai_curve8, sai_data8,fai_curve
 
-    #sai_curve1.setData(sai_data1)
-    #sai_curve2.setData(sai_data2)
+    sai_curve1.setData(sai_data1)
+    sai_curve2.setData(sai_data2)
     sai_curve3.setData(sai_data3)
-    #sai_curve4.setData(sai_data4)
-    #sai_curve5.setData(sai_data5)
+    sai_curve4.setData(sai_data4)
+    sai_curve5.setData(sai_data5)
     sai_curve6.setData(sai_data6)
-    #sai_curve7.setData(sai_data7)
-    #sai_curve8.setData(sai_data8)
+    sai_curve7.setData(sai_data7)
+    sai_curve8.setData(sai_data8)
     r_app.processEvents()
 
 def main():
@@ -47,14 +47,14 @@ def main():
     p.setWindowTitle('SAI-FAI-Right')
     p.setInteractive(True)
 
-    #sai_curve1 = p.plot(pen='r', name="SAI R curve")
-    #sai_curve2 = p.plot(pen='g', name="SAI R curve")
+    sai_curve1 = p.plot(pen='r', name="SAI R curve")
+    sai_curve2 = p.plot(pen='g', name="SAI R curve")
     sai_curve3 = p.plot(pen='b', name="SAI R curve")
-    #sai_curve4 = p.plot(pen='c', name="SAI R curve")
-    #sai_curve5 = p.plot(pen='m', name="SAI R curve")
+    sai_curve4 = p.plot(pen='c', name="SAI R curve")
+    sai_curve5 = p.plot(pen='m', name="SAI R curve")
     sai_curve6 = p.plot(pen='y', name="SAI R curve")
-    #sai_curve7 = p.plot(pen=(200, 200, 255), name="SAI R curve")
-    #sai_curve8 = p.plot(pen='w', name="SAI R curve")
+    sai_curve7 = p.plot(pen=(200, 200, 255), name="SAI R curve")
+    sai_curve8 = p.plot(pen='w', name="SAI R curve")
 
     timer = QtCore.QTimer()
     timer.timeout.connect(update)

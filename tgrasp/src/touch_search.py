@@ -584,6 +584,7 @@ class TouchSearch(object):
         # just lift it up a little bit
         
         #success = self.goto_cartesian(self.cur_x, self.cur_y, self.cur_z+0.2)
+        # Lift it to a safe know location to claim success
         success = self.goto_cartesian(-0.270671900905, -0.709247261358, 0.412344872806)
         if not success:
             print("goto_cartesian failed for {},{},{}".format(self.cur_x,
@@ -699,16 +700,13 @@ def main():
     ts = TouchSearch()
     rospy.Subscriber('/left_finger/sai', FingerSAI, ts.touch_l_update)
     rospy.Subscriber('/right_finger/sai', FingerSAI, ts.touch_r_update)
-
-    rospy.Subscriber('/left_finger/touch', FingerTouch, ts.touch_l_update)
-    rospy.Subscriber('/right_finger/sai', FingerTouch, ts.touch_r_update)
-    
-    #rospy.Subscriber('/left_finger/sai', FingerSAI, ts.touch_l_calibrate)
-    #rospy.Subscriber('/right_finger/sai', FingerSAI, ts.touch_r_calibrate)
-
-    #rospy.Subscriber('tgrasp/pclData2', PclData, ts.pclData_update)
     rate = rospy.Rate(100)
+
+    rospy.Subscriber('tgrasp/pclData2', PclData, ts.pclData_update)
+    
+    # temporary setting for quick testing
     ts.set_object_camera_info(-0.174980932323, -0.885990170529, -0.0894858747347, -0.0250728085579, 0.075)
+
     ts.search_and_grasp()
     
     rospy.spin()

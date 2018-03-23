@@ -31,7 +31,7 @@ include_directories(
 )
 
 add_executable(cluster_extractor src/cluster_extractor.cpp)
-
+add_dependencies(cluster_extractor ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(cluster_extractor
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}

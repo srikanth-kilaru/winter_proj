@@ -57,6 +57,7 @@
   <!-- Extract clusters from dataset using Euclidean cluster extraction -->
   <node pkg="tgrasp" name="cluster_extraction" type="cluster_extractor" output="screen" />
   <node pkg="tgrasp" name="pcl_transform" type="pcl_extractor.py" output="screen" />
+  <node pkg="tgrasp" name="touch_search" type="touch_search.py" output="screen" />
   <!-- Start rviz to display the extracted point cloud clusters -->
   <node pkg="rviz" type="rviz" respawn="false" name="rviz" if="$(arg show_pcl)"
         args="-d $(arg rvizConfig)" />

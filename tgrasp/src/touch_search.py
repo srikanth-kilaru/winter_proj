@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 
+#########################################
+# Srikanth Kilaru
+# Initial version: March 2018
+# MS Robotics, Northwestern University
+# Evanston, IL
+# srikanthkilaru2018@u.northwestern.edu
+##########################################
 import sys
 import rospy
 import numpy as np
@@ -24,51 +31,88 @@ from geometry_msgs.msg import Point
 from finger_sensor_msgs.msg import FingerFAI, FingerSAI, FingerTouch
 
 
-#
-# Overall logic and flow :-
-# PclData is received for the first time and stored and the
-# grasping with touch sensing process begins.
+###################################################################
+# Overall logic and flow
+####################################################################
+
+####################################################################
+# Camera Pcl data collection
+####################################################################
+# 1000 samples of the PclData are received initially and we calculate
+# the average of these samples and store the centroid location and object dimensions
+# At this point grasping with the aid of touch sensing process begins.
 # We first calculate the sequence of bounding boxes.
-# We fix the gripper orientation upfront based on the objects height and
-# does not change during the search and grasp process
-# If it is short object (threshold is hard coded), the gripper orientation is
-# vertical facing down 
+# Two bounding boxes are created on either side of the centroid along the x axis and with a
+# certain fixed depth (along the y-axis).
+#
+#####################################################################
+# Gathering touch sensor data and the notion of touch / contact:
+#####################################################################
+# We listen to the sai messages being sent in by the finger_sensors node (@1000Hz)
+# It is required to keep all the 16 sensors clear of any contact during the
+# first four seconds of starting up the program.
+# We gather the first 50 samples and take their average to create a baseline for no contact
+# Upon experimentation, it is found that each sensor behaves differently to
+# touch / proximity in that the amount by which the SAI values spike up are different.
+# The tol[] array stores the least delta value we want see between the observed SAI
+# values and the baseline to establish whether a contact is made or not.
+#
+# SAI readings for each sensor are stored in an array and for every 50 samples,
+# the mean is calculated and a comparison is made against the baseline.
+# If the mean of these 50 values exceeds the baseline values by the tolerance
+# associated with a particular sensor, then we establish that a contact has been made
+# with that sensor.
+#
+# NOTE: Since these are IR sensors, the object does not need to be in full physical contact with the object, but only needs
+# to be very close to it.
+#
+# When the search logic calls functions to check if a/any sensor is in contact or not,
+# the function call sleeps for two seconds, as sometimes we might have just made contact and
+# it takes a second or two for the new SAI mean to reflect the rise above the no contact baseline
+#
+####################################################################
+# Search process
+####################################################################
 # Starting from the x,y,z location received from camera as the first
 # bounding / search box, we go deep (along the y-axes) in the box
 # for a fixed distance in fixed increments.
 # Bounding boxes follow a sliding window approach first in the +x axes
-# direction and then in the -x axes direction for a fixed number in
-# constant fixed increments
-# Within each bounding search box we start the columnar scan at z_camera and
-# go down in small constant increments till z is zero
-# At each z value we close the jaw in small increments starting from full open.
+# direction and then in the -x axes direction at constant fixed increments
+#
 # If the object is not found in the current search box, search moves on
 # to the next search box and if the object is not found in any search box,
 # then the search and grasp fails
-# When starting scan at the top of each z value in the bounding box,
-# the gripper is fully opened and at closed in small increments 
-# Once one finger has made contact the contact is refined using the following
+# When starting scan in a bounding box, the gripper is fully opened and is
+# closed in small increments to gain touch perception
+# Once any finger makes the contact, the grasp is refined using the following
 # algorithm -
-# If one of the outer sensors is touching move along x and y in such a way
-# as to take the object into the jaw
-# If the object is making contact with the outer sensors of both fingers that
+# If one of the outer sensors is touching:
+# 1. Move along x and y in such a way as to take the object into the jaw
+# 2. If the object is making contact with the outer sensors of both fingers that
 # is a case we do not handle, i.e. the object is too wide to grasp
-# If only the shallow sensors are touching, we move inside (y axes) to deepen
-# the grasp. If the object is touching both the inner and mid sensors then
-# we will try to move it to mid and deep sensors
-# if only mid sensors and nothing else is touching, then it is a narrow object
-# and we do not try to deepen the grasp
-# if it is touching the inner sensors, then we do not try to deepen the grasp
-# Once the grasp is optimally deepened, we check to make sure both fingers are
-# touching and we slowly close the gripper in small inrements till contact
-# is made with both the fingers
-# At this point the search and grasp has concluded and we lift the object up
-#
+# 3. If only the shallow (inner) sensors are touching, we move inside
+# along the (-y axes) to deepen the grasp.
+# 4. If the object is touching both the inner and mid sensors then we will try to move
+# in along the -y axes to make contact with the mid and deep sensors.
+# 5. If only the mid sensors and nothing else is touching, then it is a narrow object
+# and we do not try to deepen the grasp.
+# 6. If it is touching the inner sensors, then we do not try to deepen the grasp,
+# we already have the best grasp.
+# 7. Once the grasp depth is optimal (as defined above), we check to make sure both
+# fingers are touching and we slowly close the gripper in small inrements till
+# contact is made with both the fingers.
+# 8. At this point the search and grasp has concluded and we lift the
+# object up to a safe known cartesian location.
+#######################################################################
 
 
 class TouchSearch(object):
     def __init__(self):
 
+        self.l_data_index = 0
+        self.r_data_index = 0
+        self.max_data_index = 50
+        
         self.camera_x = 0
         self.camera_y = 0
         self.camera_z = 0
@@ -84,16 +128,23 @@ class TouchSearch(object):
         self.ee_orientation = 0
         self.cur_search_box = 0
         
-        #self.r_sensors_raw = np.zeros(8)
-
         self.l_sensors_on = np.full((8), False, dtype=bool)
         self.r_sensors_on = np.full((8), False, dtype=bool)
+
+        self.l_sensors_data = np.zeros((8,self.max_data_index))
+        self.r_sensors_data = np.zeros((8,self.max_data_index))
+
+        self.l_sensors_calibrated = False
+        self.r_sensors_calibrated = False
+
+        # Initialized to some hand calibrated values. These will be overwritten during initialization
+        self.l_touch_thresh = [110.0, 118.0, 94.0, 123.0, 192.0, 137.0, 128.0, 100.0]
+        self.r_touch_thresh = [100.0, 93.0, 108.0, 40.0, 65.0, 120.0, 120.0, 90.0]
+
+        # These margins are individualized per sensor based on experimentation
+        self.l_tol = [15.0, 20.0, 10.0, 20.0, 10.0, 20.0, 20.0, 15.0]
+        self.r_tol = [10.0, 20.0, 20.0, 10.0, 15.0, 30.0, 15.0, 20.0]
         
-        self.l_touch_thresh = [125.0, 130.0, 180.0, 300.0, 300.0, 250.0, 130.0, 200.0]
-        self.r_touch_thresh = [140.0, 120.0, 130.0, 50.0, 70.0, 130.0, 350.0, 200.0]
-        
-        self.l_data_pts = 0
-        self.r_data_pts = 0
         self.z_increment = 0.01 # scan step size in metres
         self.OBJ_HEIGHT_LOW = 0.1 # metres
         self.scan_steps = 10
@@ -146,6 +197,8 @@ class TouchSearch(object):
         # - number of outer sensors and number of inner sensors in contact
         in_sensors = 0
         out_sensors = 0
+        
+        rospy.sleep(2.0)
 
         for s in range(8):
             if s == 3 or s == 4:
@@ -161,6 +214,8 @@ class TouchSearch(object):
         # - number of outer sensors and number of inner sensors in contact
         in_sensors = 0
         out_sensors = 0
+
+        rospy.sleep(2.0)
 
         for s in range(8):
             if s == 3 or s == 4:
@@ -192,39 +247,36 @@ class TouchSearch(object):
         return(ri >= 1)
     
     def deep_l_sensors_touching(self):
+        rospy.sleep(2.0)
         return self.l_sensors_on[0] or self.l_sensors_on[7]
     
     def deep_r_sensors_touching(self):
+        rospy.sleep(1.0)
         return self.r_sensors_on[0] or self.r_sensors_on[7]
     
     def mid_l_sensors_touching(self):
+        rospy.sleep(2.0)
         return self.l_sensors_on[1] or self.l_sensors_on[6]
     
     def mid_r_sensors_touching(self):
+        rospy.sleep(2.0)
         return self.r_sensors_on[1] or self.r_sensors_on[6]
     
     def shallow_l_sensors_touching(self):
+        rospy.sleep(2.0)
         return self.l_sensors_on[2] or self.l_sensors_on[5]
         
     def shallow_r_sensors_touching(self):
+        rospy.sleep(2.0)
         return self.r_sensors_on[2] or self.r_sensors_on[5]
 
     def open_jaw_full(self):
         gripper = intera_interface.Gripper('right_gripper')
-        offset_pos = gripper.MAX_POSITION
-        cmd_pos = max(min(gripper.get_position() + offset_pos,
-                          gripper.MAX_POSITION), gripper.MIN_POSITION)
-        gripper.set_position(cmd_pos)
-        print("commanded position set to {} m".format(cmd_pos))
+        gripper.set_position(gripper.MAX_POSITION)
                 
     def close_jaw_full(self):
         gripper = intera_interface.Gripper('right_gripper')
-        offset_pos = gripper.MIN_POSITION
-        cmd_pos = max(min(gripper.get_position() + offset_pos,
-                          gripper.MAX_POSITION), gripper.MIN_POSITION)
-        gripper.set_position(cmd_pos)
-        print("commanded position set to {} m".format(cmd_pos))
-        
+        gripper.set_position(gripper.MIN_POSITION)
         
     def open_jaw_incr(self, offset_pos):
         gripper = intera_interface.Gripper('right_gripper')
@@ -232,7 +284,6 @@ class TouchSearch(object):
                           gripper.MAX_POSITION), gripper.MIN_POSITION)
         gripper.set_position(cmd_pos)
         print("commanded position set to {} m".format(cmd_pos))
-        
         
     def close_jaw_incr(self, offset_pos):
         gripper = intera_interface.Gripper('right_gripper')
@@ -272,13 +323,11 @@ class TouchSearch(object):
         poseStamped.pose = pose
         waypoint.set_cartesian_pose(poseStamped, 'right_hand', [])
 
-        #print('Sending waypoint: \n%s', waypoint.to_string())
-
         traj.append_waypoint(waypoint.to_msg())
 
         result = traj.send_trajectory()
         if result is None:
-            print('Trajectory FAILED to send')
+            print("Trajectory FAILED to send")
             return self.MOVE_ERROR
 
         if result.result:
@@ -300,7 +349,7 @@ class TouchSearch(object):
         num_iter = int(ceil(self.finger_gap_open/self.finger_width))
         for i in range(num_iter):
             li, lo = self.count_l_sensors_touched()
-            print("In move_L_and_in: li={}, lo={}".format(li,lo))
+            print("In move_l_and_in: li={}, lo={}".format(li,lo))
             if lo > 0:
                 status = self.goto_cartesian(self.cur_x + self.finger_width,
                                              self.cur_y, self.cur_z)
@@ -312,7 +361,7 @@ class TouchSearch(object):
         # move in now
         for i in range(num_iter):
             li, lo = self.count_l_sensors_touched()
-            print("In move_l_and_IN: li={}, lo={}".format(li,lo))
+            print("In move_l_and_in: li={}, lo={}".format(li,lo))
             if li == 0:
                 status = self.goto_cartesian(self.cur_x,
                                              self.cur_y - self.in_sensor_spacing/2.0,
@@ -330,7 +379,7 @@ class TouchSearch(object):
         num_iter = int(ceil(self.finger_gap_open/self.finger_width))
         for i in range(num_iter):
             ri, ro = self.count_r_sensors_touched()
-            print("In move_R_and_in: ri={}, ro={}".format(ri,ro))
+            print("In move_r_and_in: ri={}, ro={}".format(ri,ro))
             if ro > 0:
                 status = self.goto_cartesian(self.cur_x - self.finger_width,
                                              self.cur_y, self.cur_z)
@@ -342,7 +391,7 @@ class TouchSearch(object):
         # move in now
         for i in range(num_iter):
             ri, ro = self.count_r_sensors_touched()
-            print("In move_r_and_IN: ri={}, ro={}".format(ri,ro))
+            print("In move_r_and_in: ri={}, ro={}".format(ri,ro))
             if ri == 0:  
                 status = self.goto_cartesian(self.cur_x,
                                              self.cur_y - self.in_sensor_spacing/2.0,
@@ -436,7 +485,7 @@ class TouchSearch(object):
             print("both fingers have touched")
             if self.deep_l_sensors_touching() or self.deep_r_sensors_touching():
                 print("we have the complete grasp")
-                return (self.FULL_GRASP)
+                return (self.BEST_GRASP_DEPTH)
             elif self.mid_l_sensors_touching() or self.mid_r_sensors_touching():
                 if self.shallow_l_sensors_touching() or self.shallow_r_sensors_touching():
                     # middle and shallow inner sensors are touching 
@@ -446,7 +495,7 @@ class TouchSearch(object):
                     # this is the best case as it is a thin object and wouldnt
                     # touch more than 2 sensors at a time
                     print("best contact is touching middle inner sensors only")
-                    return self.FULL_GRASP
+                    return self.BEST_GRASP_DEPTH
             else:
                 print("try deepening the grasp from shallow")
                 return self.deepen_grasp()
@@ -483,19 +532,6 @@ class TouchSearch(object):
             print("No finger sensors are touching at {}".format(self.cur_z))
             return self.ZERO_TOUCH
         
-    def full_grip(self, cur_pos, remaining_steps, position_increment):
-        #called only when the depth of the grasp is Optimal
-        i = 1
-        offset_pos = cur_pos
-        while not (self.inner_l_sensors_touched() and self.inner_r_sensors_touched()):
-            offset_pos += i*position_increment
-            self.close_jaw_incr(offset_pos)
-            i += 1
-            if i > self.scan_steps:
-                return self.FULL_GRASP
-        return self.FULL_GRASP
-
-
     def scan_incr(self):
         offset_pos = 0
         gripper = intera_interface.Gripper('right_gripper')
@@ -505,22 +541,21 @@ class TouchSearch(object):
         status = None
         print("num_steps = {}".format(num_steps))
         for i in range(num_steps):
-            print("i={}".format(i))
+            print("scan_incr iteration = {}".format(i))
             # close by small increments
             offset_pos += position_increment
             #offset_pos += (i+1)*position_increment
             self.close_jaw_incr(offset_pos)
             status = self.iterate_touch_sense()
-            if status == self.FULL_GRASP:
-                return self.FULL_GRASP
             if status == self.BEST_GRASP_DEPTH:
                 # tighten grasp till both fingers are just touching
                 # only one finger is touching
-                return self.full_grip(offset_pos, num_steps - (i+1),
-                                      position_increment)
-        return status
+                #return self.full_grip(offset_pos, num_steps - (i+1), position_increment)
+                self.close_jaw_full()
+                return self.FULL_GRASP
+            else:
+                return status
     
-    '''
     def scan_column(self):
         i = 1
         while True:
@@ -538,7 +573,6 @@ class TouchSearch(object):
             if status == self.FULL_GRASP:
                 return self.FULL_GRASP
             i += 1
-    '''
     
     def goto_search_box(self):
         self.open_jaw_full()
@@ -562,7 +596,6 @@ class TouchSearch(object):
         num_lateral =  int(self.finger_gap_open/lateral_incr)-1
         depth_incr = self.in_sensor_spacing
         num_depth = int(self.finger_depth/depth_incr)
-        #print("lateral_incr = {}, num_lateral = {}, depth_incr = {}, num_depth = {}".format(lateral_incr, num_lateral, depth_incr, num_depth))
         
         # the very first one is the camera given x,y
         self.search_boxes.append([self.camera_x, self.camera_y])
@@ -581,11 +614,8 @@ class TouchSearch(object):
         print(self.search_boxes)
                 
     def pickup_object(self):
-        # just lift it up a little bit
-        
-        #success = self.goto_cartesian(self.cur_x, self.cur_y, self.cur_z+0.2)
         # Lift it to a safe know location to claim success
-        success = self.goto_cartesian(-0.270671900905, -0.709247261358, 0.412344872806)
+        success = self.goto_cartesian(self.cur_x, self.cur_y, self.cur_z+0.2)
         if not success:
             print("goto_cartesian failed for {},{},{}".format(self.cur_x,
                                                               self.cur_y,
@@ -603,79 +633,81 @@ class TouchSearch(object):
                 self.pickup_object()
                 exit()
 
-    '''
-    def touch_l_calibrate(self, msg):
-        self.l_data_pts += 1
-        self.l_sensors_on[0] = ((self.l_data_pts-1)*self.l_sensors_on[0])+msg.sensor1; self.l_sensors_on[0] /= self.l_data_pts
-        self.l_sensors_on[1] = ((self.l_data_pts-1)*self.l_sensors_on[1])+msg.sensor2; self.l_sensors_on[1] /= self.l_data_pts
-        self.l_sensors_on[2] = ((self.l_data_pts-1)*self.l_sensors_on[2])+msg.sensor3; self.l_sensors_on[2] /= self.l_data_pts
-        self.l_sensors_on[3] = ((self.l_data_pts-1)*self.l_sensors_on[3])+msg.sensor4; self.l_sensors_on[3] /= self.l_data_pts
-        self.l_sensors_on[4] = ((self.l_data_pts-1)*self.l_sensors_on[4])+msg.sensor5; self.l_sensors_on[4] /= self.l_data_pts
-        self.l_sensors_on[5] = ((self.l_data_pts-1)*self.l_sensors_on[5])+msg.sensor6; self.l_sensors_on[5] /= self.l_data_pts
-        self.l_sensors_on[6] = ((self.l_data_pts-1)*self.l_sensors_on[6])+msg.sensor7; self.l_sensors_on[6] /= self.l_data_pts
-        self.l_sensors_on[7] = ((self.l_data_pts-1)*self.l_sensors_on[7])+msg.sensor8; self.l_sensors_on[7] /= self.l_data_pts
-        #print("Left sensors: {}".format(self.str_l_sensor_state()))
+    def touch_l_sai_update(self, msg):
+        self.l_sensors_data[0,self.l_data_index] = msg.sensor1
+        self.l_sensors_data[1,self.l_data_index] = msg.sensor2
+        self.l_sensors_data[2,self.l_data_index] = msg.sensor3
+        self.l_sensors_data[3,self.l_data_index] = msg.sensor4
+        self.l_sensors_data[4,self.l_data_index] = msg.sensor5
+        self.l_sensors_data[5,self.l_data_index] = msg.sensor6
+        self.l_sensors_data[6,self.l_data_index] = msg.sensor7
+        self.l_sensors_data[7,self.l_data_index] = msg.sensor8
+        self.l_data_index += 1
+        if self.l_data_index == self.max_data_index:
+            # Do the one time initial baseline calibration with no contact.
+            # Ensure there is NOTHING close to the sensors when this code runs
+            if not self.l_sensors_calibrated:
+                self.l_sensors_calibrated = True
+                self.l_touch_thresh[0] = self.mean(self.l_sensors_data[0,:])
+                self.l_touch_thresh[1] = self.mean(self.l_sensors_data[1,:])
+                self.l_touch_thresh[2] = self.mean(self.l_sensors_data[2,:])                
+                self.l_touch_thresh[3] = self.mean(self.l_sensors_data[3,:])
+                self.l_touch_thresh[4] = self.mean(self.l_sensors_data[4,:])
+                self.l_touch_thresh[5] = self.mean(self.l_sensors_data[5,:])
+                self.l_touch_thresh[6] = self.mean(self.l_sensors_data[6,:])
+                self.l_touch_thresh[7] = self.mean(self.l_sensors_data[7,:])
+                
+            self.l_data_index = 0
+            self.l_sensors_on[0] = self.mean(self.l_sensors_data[0,:]) > self.l_touch_thresh[0]+self.l_tol[0]
+            self.l_sensors_on[1] = self.mean(self.l_sensors_data[1,:]) > self.l_touch_thresh[1]+self.l_tol[1]
+            self.l_sensors_on[2] = self.mean(self.l_sensors_data[2,:]) > self.l_touch_thresh[2]+self.l_tol[2]
+            self.l_sensors_on[3] = self.mean(self.l_sensors_data[3,:]) > self.l_touch_thresh[3]+self.l_tol[3]
+            self.l_sensors_on[4] = self.mean(self.l_sensors_data[4,:]) > self.l_touch_thresh[4]+self.l_tol[4]
+            self.l_sensors_on[5] = self.mean(self.l_sensors_data[5,:]) > self.l_touch_thresh[5]+self.l_tol[5]
+            self.l_sensors_on[6] = self.mean(self.l_sensors_data[6,:]) > self.l_touch_thresh[6]+self.l_tol[6]
+            self.l_sensors_on[7] = self.mean(self.l_sensors_data[7,:]) > self.l_touch_thresh[7]+self.l_tol[7]
+ 
+            #rospy.loginfo("Average values of Left sensors: %f %f %f %f %f %f %f %f", self.mean(self.l_sensors_data[0,:]), self.mean(self.l_sensors_data[1,:]), self.mean(self.l_sensors_data[2,:]), self.mean(self.l_sensors_data[3,:]), self.mean(self.l_sensors_data[4,:]), self.mean(self.l_sensors_data[5,:]), self.mean(self.l_sensors_data[6,:]), self.mean(self.l_sensors_data[7,:]))
 
 
-    def touch_r_calibrate(self, msg):
-        self.r_data_pts += 1
-        self.r_sensors_on[0] = ((self.r_data_pts-1)*self.r_sensors_on[0])+msg.sensor1; self.r_sensors_on[0] /= self.r_data_pts
-        self.r_sensors_on[1] = ((self.r_data_pts-1)*self.r_sensors_on[1])+msg.sensor2; self.r_sensors_on[1] /= self.r_data_pts
-        self.r_sensors_on[2] = ((self.r_data_pts-1)*self.r_sensors_on[2])+msg.sensor3; self.r_sensors_on[2] /= self.r_data_pts
-        self.r_sensors_on[3] = ((self.r_data_pts-1)*self.r_sensors_on[3])+msg.sensor4; self.r_sensors_on[3] /= self.r_data_pts
-        self.r_sensors_on[4] = ((self.r_data_pts-1)*self.r_sensors_on[4])+msg.sensor5; self.r_sensors_on[4] /= self.r_data_pts
-        self.r_sensors_on[5] = ((self.r_data_pts-1)*self.r_sensors_on[5])+msg.sensor6; self.r_sensors_on[5] /= self.r_data_pts
-        self.r_sensors_on[6] = ((self.r_data_pts-1)*self.r_sensors_on[6])+msg.sensor7; self.r_sensors_on[6] /= self.r_data_pts
-        self.r_sensors_on[7] = ((self.r_data_pts-1)*self.r_sensors_on[7])+msg.sensor8; self.r_sensors_on[7] /= self.r_data_pts
-        #print("Right sensors: {}".format(self.str_r_sensor_state()))
+    def touch_r_sai_update(self, msg):
+        self.r_sensors_data[0,self.r_data_index] = msg.sensor1
+        self.r_sensors_data[1,self.r_data_index] = msg.sensor2
+        self.r_sensors_data[2,self.r_data_index] = msg.sensor3
+        self.r_sensors_data[3,self.r_data_index] = msg.sensor4
+        self.r_sensors_data[4,self.r_data_index] = msg.sensor5
+        self.r_sensors_data[5,self.r_data_index] = msg.sensor6
+        self.r_sensors_data[6,self.r_data_index] = msg.sensor7
+        self.r_sensors_data[7,self.r_data_index] = msg.sensor8
+        self.r_data_index += 1
 
-    def touch_l_update(self, msg):
-        self.l_sensors_on[0] = msg.sensor1
-        self.l_sensors_on[1] = msg.sensor2
-        self.l_sensors_on[2] = msg.sensor3
-        self.l_sensors_on[3] = msg.sensor4
-        self.l_sensors_on[4] = msg.sensor5
-        self.l_sensors_on[5] = msg.sensor6
-        self.l_sensors_on[6] = msg.sensor7
-        self.l_sensors_on[7] = msg.sensor8
-        #print("Left sensors: {}".format(self.str_l_sensor_state()))
-
-    def touch_r_update(self, msg):
-        self.r_sensors_on[0] = msg.sensor1
-        self.r_sensors_on[1] = msg.sensor2
-        self.r_sensors_on[2] = msg.sensor3
-        self.r_sensors_on[3] = msg.sensor4
-        self.r_sensors_on[4] = msg.sensor5
-        self.r_sensors_on[5] = msg.sensor6
-        self.r_sensors_on[6] = msg.sensor7
-        self.r_sensors_on[7] = msg.sensor8
-        #print("Right sensors: {}".format(self.str_r_sensor_state()))
-    '''
+        if self.r_data_index == self.max_data_index:
+            # Do the one time initial baseline calibration with no contact.
+            # Ensure there is NOTHING close to the sensors when this code runs
+            if not self.r_sensors_calibrated:
+                self.r_sensors_calibrated = True
+                self.r_touch_thresh[0] = self.mean(self.r_sensors_data[0,:])
+                self.r_touch_thresh[1] = self.mean(self.r_sensors_data[1,:])
+                self.r_touch_thresh[2] = self.mean(self.r_sensors_data[2,:])                
+                self.r_touch_thresh[3] = self.mean(self.r_sensors_data[3,:])
+                self.r_touch_thresh[4] = self.mean(self.r_sensors_data[4,:])
+                self.r_touch_thresh[5] = self.mean(self.r_sensors_data[5,:])
+                self.r_touch_thresh[6] = self.mean(self.r_sensors_data[6,:])
+                self.r_touch_thresh[7] = self.mean(self.r_sensors_data[7,:])
+                
+            self.r_data_index = 0
+            self.r_sensors_on[0] = self.mean(self.r_sensors_data[0,:]) > self.r_touch_thresh[0]+self.r_tol[0]
+            self.r_sensors_on[1] = self.mean(self.r_sensors_data[1,:]) > self.r_touch_thresh[1]+self.r_tol[1]
+            self.r_sensors_on[2] = self.mean(self.r_sensors_data[2,:]) > self.r_touch_thresh[2]+self.r_tol[2]
+            self.r_sensors_on[3] = self.mean(self.r_sensors_data[3,:]) > self.r_touch_thresh[3]+self.r_tol[3]
+            self.r_sensors_on[4] = self.mean(self.r_sensors_data[4,:]) > self.r_touch_thresh[4]+self.r_tol[4]
+            self.r_sensors_on[5] = self.mean(self.r_sensors_data[5,:]) > self.r_touch_thresh[5]+self.r_tol[5]
+            self.r_sensors_on[6] = self.mean(self.r_sensors_data[6,:]) > self.r_touch_thresh[6]+self.r_tol[6]
+            self.r_sensors_on[7] = self.mean(self.r_sensors_data[7,:]) > self.r_touch_thresh[7]+self.r_tol[7]
     
-    def touch_l_update(self, msg):
-        self.l_sensors_on[0] = msg.sensor1 >= self.l_touch_thresh[0]
-        self.l_sensors_on[1] = msg.sensor2 >= self.l_touch_thresh[1]
-        self.l_sensors_on[2] = msg.sensor3 >= self.l_touch_thresh[2]
-        self.l_sensors_on[3] = msg.sensor4 >= self.l_touch_thresh[3]
-        self.l_sensors_on[4] = msg.sensor5 >= self.l_touch_thresh[4]
-        self.l_sensors_on[5] = msg.sensor6 >= self.l_touch_thresh[5]
-        self.l_sensors_on[6] = msg.sensor7 >= self.l_touch_thresh[6]
-        self.l_sensors_on[7] = msg.sensor8 >= self.l_touch_thresh[7]
-        #print("Left sensors: {}".format(self.str_l_sensor_state()))
+            #rospy.loginfo("Average values of Right sensors: %f %f %f %f %f %f %f %f", self.mean(self.r_sensors_data[0,:]), self.mean(self.r_sensors_data[1,:]), self.mean(self.r_sensors_data[2,:]), self.mean(self.r_sensors_data[3,:]), self.mean(self.r_sensors_data[4,:]), self.mean(self.r_sensors_data[5,:]), self.mean(self.r_sensors_data[6,:]), self.mean(self.r_sensors_data[7,:]))
 
 
-    def touch_r_update(self, msg):
-        self.r_sensors_on[0] = msg.sensor1 >= self.r_touch_thresh[0]
-        self.r_sensors_on[1] = msg.sensor2 >= self.r_touch_thresh[1]
-        self.r_sensors_on[2] = msg.sensor3 >= self.r_touch_thresh[2]
-        self.r_sensors_on[3] = msg.sensor4 >= self.r_touch_thresh[3]
-        self.r_sensors_on[4] = msg.sensor5 >= self.r_touch_thresh[4]
-        self.r_sensors_on[5] = msg.sensor6 >= self.r_touch_thresh[5]
-        self.r_sensors_on[6] = msg.sensor7 >= self.r_touch_thresh[6]
-        self.r_sensors_on[7] = msg.sensor8 >= self.r_touch_thresh[7]
-        #print("Right sensors: {}".format(self.str_r_sensor_state()))
-    
-        
     def mean(self, numbers):
         return float(sum(numbers)) / max(len(numbers), 1)
     
@@ -698,15 +730,14 @@ class TouchSearch(object):
 def main():
     rospy.init_node('touch_search')
     ts = TouchSearch()
-    rospy.Subscriber('/left_finger/sai', FingerSAI, ts.touch_l_update)
-    rospy.Subscriber('/right_finger/sai', FingerSAI, ts.touch_r_update)
-    rate = rospy.Rate(100)
+    rospy.Subscriber('/left_finger/sai', FingerSAI, ts.touch_l_sai_update)
+    rospy.Subscriber('/right_finger/sai', FingerSAI, ts.touch_r_sai_update)
+
+    rate = rospy.Rate(1000)
 
     rospy.Subscriber('tgrasp/pclData2', PclData, ts.pclData_update)
-    
-    # temporary setting for quick testing
-    ts.set_object_camera_info(-0.174980932323, -0.885990170529, -0.0894858747347, -0.0250728085579, 0.075)
-
+    #temporary setting for quick testing
+    ts.set_object_camera_info(-0.345994341187, -0.840587510401, -0.013662617369, 0.0250728085579, 0.075)
     ts.search_and_grasp()
     
     rospy.spin()

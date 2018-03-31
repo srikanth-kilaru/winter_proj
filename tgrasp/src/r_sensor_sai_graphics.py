@@ -23,7 +23,7 @@ sai_data8 = []
 r_app = QtGui.QApplication(["Right finger sensors"])
 
 def update():
-    global r_app, sai_curve1, sai_data1, sai_curve2, sai_data2,sai_curve3, sai_data3,sai_curve4, sai_data4,sai_curve5, sai_data5,sai_curve6, sai_data6,sai_curve7, sai_data7,sai_curve8, sai_data8,fai_curve
+    global r_app, sai_curve1, sai_data1, sai_curve2, sai_data2,sai_curve3, sai_data3,sai_curve4, sai_data4,sai_curve5, sai_data5,sai_curve6, sai_data6,sai_curve7, sai_data7,sai_curve8, sai_data8
 
     sai_curve1.setData(sai_data1)
     sai_curve2.setData(sai_data2)
@@ -44,7 +44,7 @@ def main():
     p=pg.plot()
     pg.setConfigOption('background', 'w')
     pg.setConfigOption('foreground', 'w')
-    p.setWindowTitle('SAI-FAI-Right')
+    p.setWindowTitle('SAI-Right')
     p.setInteractive(True)
 
     sai_curve1 = p.plot(pen='r', name="SAI R curve")
@@ -64,15 +64,6 @@ def main():
     rospy.spin()
 
 def sai_r_callback(msg):
-    #print ("sai_l_callback:")
-    #print("sensor1 = {}".format(msg.sensor1))
-    #print("sensor2 = {}".format(msg.sensor2))
-    #print("sensor3 = {}".format(msg.sensor3))    
-    #print("sensor4 = {}".format(msg.sensor4))
-    #print("sensor5 = {}".format(msg.sensor5))
-    #print("sensor6 = {}".format(msg.sensor6))
-    #print("sensor7 = {}".format(msg.sensor7))
-    #print("sensor8 = {}".format(msg.sensor8))
     sai_data1.append(msg.sensor1)
     sai_data2.append(msg.sensor2)
     sai_data3.append(msg.sensor3)

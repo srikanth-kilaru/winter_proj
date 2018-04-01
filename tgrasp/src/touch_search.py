@@ -124,8 +124,12 @@ class TouchSearch(object):
         self.cur_y = 0
         self.cur_z = 0
 
+        self.orientation_x = 0.5
+        self.orientation_y = -0.5
+        self.orientation_z = 0.5
+        self.orientation_w = 0.5
+        
         self.search_boxes = []
-        self.ee_orientation = 0
         self.cur_search_box = 0
         
         self.l_sensors_on = np.full((8), False, dtype=bool)
@@ -292,13 +296,20 @@ class TouchSearch(object):
         gripper.set_position(cmd_pos)
         print("commanded position set to {} m".format(cmd_pos))
         
-    def calc_gripper_orientation(self, obj_height):
-        if obj_height <= self.OBJ_HEIGHT_LOW:
-            self.ee_orientation = 1
+    def calc_gripper_orientation(self):
+        # This function is called after the object height has been
+        # correctly estimated from PCL data and stored
+        if self.obj_height <= self.OBJ_HEIGHT_LOW:
+            self.orientation_x = 0.0
+            self.orientation_y = 1.0
+            self.orientation_z = 0.0
+            self.orientation_w = 0.0
         else:
-            self.ee_orientation = 0
-        return self.ee_orientation
-       
+            self.orientation_x = 0.5
+            self.orientation_y = -0.5
+            self.orientation_z = 0.5
+            self.orientation_w = 0.5
+    
     def goto_cartesian(self, x, y, z):
         print("goto_cartesian called with x={}, y={}, z={}".format(x,y,z))
         limb = Limb()
@@ -319,6 +330,10 @@ class TouchSearch(object):
         pose.position.x = x
         pose.position.y = y
         pose.position.z = z
+        pose.orientation.x = self.orientation_x
+        pose.orientation.y = self.orientation_y
+        pose.orientation.z = self.orientation_z
+        pose.orientation.w = self.orientation_w
         poseStamped = PoseStamped()
         poseStamped.pose = pose
         waypoint.set_cartesian_pose(poseStamped, 'right_hand', [])
@@ -532,7 +547,7 @@ class TouchSearch(object):
             print("No finger sensors are touching at {}".format(self.cur_z))
             return self.ZERO_TOUCH
         
-    def scan_incr(self):
+    def scan_horizontal(self):
         offset_pos = 0
         gripper = intera_interface.Gripper('right_gripper')
         num_steps = self.scan_steps
@@ -541,7 +556,7 @@ class TouchSearch(object):
         status = None
         print("num_steps = {}".format(num_steps))
         for i in range(num_steps):
-            print("scan_incr iteration = {}".format(i))
+            print("scan_horizontal iteration = {}".format(i))
             # close by small increments
             offset_pos += position_increment
             #offset_pos += (i+1)*position_increment
@@ -556,7 +571,7 @@ class TouchSearch(object):
             else:
                 return status
     
-    def scan_column(self):
+    def scan_vertical(self):
         i = 1
         while True:
             zd = self.cur_z - i*(self.z_increment)
@@ -569,7 +584,7 @@ class TouchSearch(object):
                                                                   zd))
             else:
                 self.cur_z = zd
-            status = self.scan_incr()
+            status = self.scan_horizontal()
             if status == self.FULL_GRASP:
                 return self.FULL_GRASP
             i += 1
@@ -627,8 +642,10 @@ class TouchSearch(object):
             if self.goto_search_box() == self.MOVE_ERROR:
                 print("Move failed") 
                 exit()
-            status = self.scan_incr()
-            #status = self.scan_column()
+            if self.obj_height <= self.OBJ_HEIGHT_LOW:
+                status = self.scan_vertical()
+            else:
+                status = self.scan_horizontal()
             if status == self.FULL_GRASP:
                 self.pickup_object()
                 exit()
@@ -724,6 +741,7 @@ class TouchSearch(object):
                                         self.mean(self.pcl_centroid_z),
                                         self.mean(self.pcl_height),
                                         self.mean(self.pcl_width))
+            self.calc_gripper_orientation()
             self.search_and_grasp()
         
 

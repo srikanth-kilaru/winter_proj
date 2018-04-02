@@ -40,18 +40,64 @@ An ASUS XtionPRO LIVE is used to view objects that need to be grasped. Point clo
 ### Touch Sensing and Grasping node
 This is the main node where the touch sense based localization and grasping logic is implemented.
 This node subscribes to ROS topics that publish the sensory data coming in from the sensor reading node and the pointcloud information (PCL data) coming in from the computer vision node.
-The PCL data gives the centroid location of the object to be grasped and this is the location in Cartesian coordinates of Sawyer's base frame. Sawyer is commanded to move the end effector to this location. Once this location is reached, the grippers close in small increments, both to prevent deforming delicate objects as well as notice any touch contact. If there is partial contact on any of the sensors (either the inner or the outer), the end effector and the gripper move in such a way as to deepen the grasp. If there is zero contact at the initially commanded location, the end effector is commanded to the next search location within close proximity of the initial location and it repeats the whole search process by slowly closing the grippers. In this way the gripper iterates through a series of search locations in and around the location initially identified as the object's centroid location by the PCL data.
-
-### Kinematics
-Sawyer's movements are controlled using the intera_sdk ROS package developed by [Rethink Robotics](http://sdk.rethinkrobotics.com/intera/Main_Page). Specifically the [intera_motion_interface](http://sdk.rethinkrobotics.com/intera/Robot_Interface) from this package is used by the touch sensing node to command Sawyer to take the end effector to a specific cartesian location and to open / close the grippers. The intera_motion_interface does the path planning, including collision detection, to reach the goal.
 
 
-## Implementation Details
-## Package Structure Overview
-contains the packages - `tgrasp`, `tgrasp_msgs`
+#### Overall logic and flow implemented in this node
 
+##### Camera Pcl data collection
+
+1K samples of the PclData are received initially and we calculate the average of these samples and store the centroid location and object dimensions.
+
+At this point grasping with the aid of touch sensing process begins. We first calculate the sequence of bounding boxes. See section on search process below for information on the search / bounding boxes.
+
+
+##### Gathering touch sensor data and the notion of touch / contact:
+
+We listen to the SAI (Slow Acting Indicator) messages being sent in by the finger_sensors node (@1KHz).
+ It is required that we keep all the 16 sensors clear of any contact during the first four seconds of starting up the program. During this period, the program gathers the first 50 samples and takes their average to create a set of baseline values for the no contact scenario.
+ 
+Upon experimentation, it is found that each sensor behaves differently to touch / proximity in that the amount by which the SAI values spike up are different.
+
+The tol[] array stores the least delta value we want see between the observed SAI values and the baseline to establish whether a contact is made or not.
+
+SAI readings for each sensor are stored in an array and for every 50 samples, the mean is calculated and a comparison is made against the baseline. If the mean of these 50 values exceeds the baseline values by the tolerance associated with a particular sensor, then we establish that a contact has been made with that sensor.
+
+NOTE: Since these are IR sensors, the object does not need to be in full physical contact with the object, but only needs to be very close to it.
+
+When the search logic calls functions to check if a/any sensor is in contact or not, the function call sleeps for two seconds, as sometimes we might have just made contact and it takes a second or two for the new SAI mean to reflect the rise above the no-contact baseline.
+
+
+
+##### Search process
+
+Starting from the x,y,z location received from camera as the first bounding / search box, we calculate a set of sequential search boxes in 3D space.
+
+Before we talk about how we align the search boxes, we have to figure out the best gripper orientation. If the object is a tall object (i.e. above a certain height threshold, we calculate the gripper orientation to be in a plane perpendicular to the z-axis of Sawyer.
+
+If the the object is a short object (i.e. below a certain height threshold, we calculate the gripper orientation to be either in a plane perpendicular to the x-axis or y-axis of Sawyer. The orientation in this case is dependent upon the width of the object as seen by the camera. If the camera sees a wide object, i.e. whose width is greater than or equal to the width of the fully open gripper, then we chose the orientation of the EE to be in a plane perpendicular to the x-axis, else the EE orientation will be in a plane perpendicular to the y-axis of Sawyer.
+
+
+###### Allocating the search boxes:
+In the EE orientation where it is in a plane perpendicular to Sawyer's z-axis, the Search / Bounding boxes follow a sliding window approach first in the +x axes direction and then in the -x axes direction at constant fixed increments. For each of these x locations, the window extends along the y-axes for a certain fixed amount.
+
+If the EE orientation is in a plane perpendicular to Sawyer's x or y-axis, the Search / Bounding boxes follow a sliding window approach first along the -z axes direction and then along the y axes direction followed by along the x-axis. There are equal numbers of search boxes on either side of the initial search box (centered at the camera given location), along the x & y axes.
+
+If the object is not found in the current search box, search moves on to the next search box and if the object is not found in any search box, then the search and grasp fails When starting scan in a bounding box, the gripper is fully opened and is closed in small increments to gain touch perception. Once any finger makes the contact, the grasp is refined using the following algorithm -
+
+If one of the outer sensors is touching:
+1. Move along x and y in such a way as to take the object into the jaw
+2. If the object is making contact with the outer sensors of both fingers that is a case we do not handle, i.e. the object is too wide to grasp
+3. If only the shallow (inner) sensors are touching, we move inside along the (-y axes or the -z axes depending upon the EE orientation) to deepen the grasp.
+4. If the object is touching both the inner and mid sensors then we will try to move in along the -y axes or the -z axes, depending upon the EE orientation, to make contact with the mid and deep sensors.
+5. If only the mid sensors and nothing else is touching, then it is a narrow object and we do not try to deepen the grasp.
+6. If it is touching the inner sensors, then we do not try to deepen the grasp, we already have the best grasp.
+7. Once the grasp depth is optimal (as defined above), we check to make sure both fingers are touching and we slowly close the gripper in small increments till contact is made with both the fingers.
+8. At this point the search and grasp has concluded and we lift the object up to a safe known cartesian location.
+
+
+#### ROS Package structure
 `tgrasp` package contains -
-`src`: contains - `touch_search.py`, `pcl_extractor.py` `l_sensor_graphics.py` `r_sensor_graphics.py`
+`src`: contains - `touch_search.py`, `pcl_extractor.py` `l_sensor_sai_graphics.py` `r_sensor_sai_graphics.py`
 `launch`: contains `tgrasp.launch`
 `rviz`: contains `rvizConfig.rviz`
 
@@ -63,10 +109,10 @@ contains the packages - `tgrasp`, `tgrasp_msgs`
 1. `touch_search.py`  
     - Sub: /left_finger/sai, /right_finger/sai, tgrasp/pclData2  
     - Pub: None
-2. `l_sensor_graphics.py`   
+2. `l_sensor_sai_graphics.py`   
     - Sub: /left_finger/sai, /right_finger/sai
     - Pub: None
-3. `r_sensor_graphics.py`   
+3. `r_sensor_sai_graphics.py`   
     - Sub: /left_finger/sai, /right_finger/sai
     - Pub: None
 4. `cluster_extracter.cpp`   
@@ -110,10 +156,3 @@ Once the above mentioned packages are installed, these are the only two launch f
 
 The scripts `l_sensor_graphics.py` and `r_sensor_graphics.py` are purely for visualizing the sensor readings in a GUI and can be run in a separate window. No launch file is required. 
 
-### Algorithm used by touch_search.py
-The algorithm employed by the touch_search node is fairly simple yet quite robust.
-The object location information contained in the PclData centroid attributes is used as the initial coordinates to command the end effector (EE) to.
-
-This node constructs two search boxes on either sides (total of four) of the object centroid along the x axis. The depth of each search box is set to be the depth of the gripper. The starting search box is the initial location of the gripper as received from the PCL data. In each search box, the gripper slowly closes until the touch sensors sense a touch. If there is no touch sensed on any of the eight sensors on either of the fingers, the EE is commanded to the next search box. If in any search box, if the outer sensors (sensor 4 & 5) sense touch, this is taken as an indication of outer contact. If this outer sensors are located on the left finger, the EE is commanded to move left in small increments equal to the finger width until there is no outer touch. This then is taken as an indication to move 'in' (along the y-axis) to make contact with the inner sensors. Once the inner sensors have made contact the grasp is slowly closed and the object is raised to a fixed height to claim a successful grasp!. The logic mentioned for the left gripper is applicable to the right finger as well, except that instead of moving left, it moves to the right.
-Once touch is sensed on the inner sensors, the algorithm checks if the object grasp can be deepened before the gripper is closed. By deepening we mean that if only the shallow sensors are touching, then we will move 'in' to make contact with the inner middle sensors. For curved objects it is very possible that only the middle sensors register a contact and that is considered as the best possible grasp depth.
-A key aspect in this implementation is to account for the noisy sensors and tune the definition of what sensor values correspond to a 'touch' or 'contact'.

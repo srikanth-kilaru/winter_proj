@@ -42,9 +42,8 @@ from finger_sensor_msgs.msg import FingerFAI, FingerSAI, FingerTouch
 # the average of these samples and store the centroid location and object
 # dimensions
 # At this point grasping with the aid of touch sensing process begins.
-# We first calculate the sequence of bounding boxes.
-# Two bounding boxes are created on either side of the centroid along the
-# x axis and with a certain fixed depth (along the y-axis).
+# We first calculate the sequence of bounding boxes. See section on search
+# process below for information on the search / bounding boxes
 #
 #####################################################################
 # Gathering touch sensor data and the notion of touch / contact:
@@ -79,11 +78,36 @@ from finger_sensor_msgs.msg import FingerFAI, FingerSAI, FingerTouch
 # Search process
 ####################################################################
 # Starting from the x,y,z location received from camera as the first
-# bounding / search box, we go deep (along the y-axes) in the box
-# for a fixed distance in fixed increments.
-# Bounding boxes follow a sliding window approach first in the +x axes
-# direction and then in the -x axes direction at constant fixed increments
+# bounding / search box, we calculate a set of sequential search boxes in
+# 3D space. Before we talk about how we align the search boxes, we have to
+# figure out the best gripper orientation.
+# If the object is a tall object (i.e. above a certain height threshold,
+# we calculate the gripper orientation to be in a plane perpendicular to the
+# z-axis of Sawyer.
+# If the the object is a short object (i.e. below a certain height threshold,
+# we calculate the gripper orientation to be either in a plane perpendicular to
+# the x-axis or y-axis of Sawyer. The orientation in this case is dependent
+# upon the width of the object as seen by the camera.
+# If the camera sees a wide object, i.e. whose width is greater than or equal to
+# the width of the fully open gripper, then we chose the orientation of the EE
+# to be in a plane perpendicular to the x-axis, else the EE orientation will be
+# in a plane perpendicular to the y-axis of Sawyer.
 #
+# Allocating the search boxes:
+#
+# In the EE orientation where it is in a plane perpendicular to Sawyer's z-axis,
+# the Search / Bounding boxes follow a sliding window approach first
+# in the +x axes direction and then in the -x axes direction at constant fixed
+# increments. For each of these x locations, the window extends along the
+# y-axes for a certain fixed amount.
+# 
+# If the EE orientation is in a plane perpendicular to Sawyer's x or y-axis,
+# the Search / Bounding boxes follow a sliding window approach first
+# along the -z axes direction and then along the y axes direction followed by
+# along the x-axis. There are equal numbers of search boxes on either side of
+# the initial search box (centered at the camera given location), along the
+# x & y axes.
+# 
 # If the object is not found in the current search box, search moves on
 # to the next search box and if the object is not found in any search box,
 # then the search and grasp fails
@@ -91,15 +115,17 @@ from finger_sensor_msgs.msg import FingerFAI, FingerSAI, FingerTouch
 # closed in small increments to gain touch perception
 # Once any finger makes the contact, the grasp is refined using the following
 # algorithm -
+#
 # If one of the outer sensors is touching:
 # 1. Move along x and y in such a way as to take the object into the jaw
 # 2. If the object is making contact with the outer sensors of both fingers
 # that is a case we do not handle, i.e. the object is too wide to grasp
 # 3. If only the shallow (inner) sensors are touching, we move inside
-# along the (-y axes) to deepen the grasp.
+# along the (-y axes or the -z axes depending upon the EE orientation)
+# to deepen the grasp.
 # 4. If the object is touching both the inner and mid sensors then we will
-# try to move in along the -y axes to make contact with the mid and deep
-# sensors.
+# try to move in along the -y axes or the -z axes, depending upon the
+# EE orientation, to make contact with the mid and deep sensors.
 # 5. If only the mid sensors and nothing else is touching, then it is a
 # narrow object and we do not try to deepen the grasp.
 # 6. If it is touching the inner sensors, then we do not try to deepen the

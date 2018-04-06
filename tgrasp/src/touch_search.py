@@ -10,7 +10,6 @@
 import sys
 import rospy
 import numpy as np
-import modern_robotics as mr
 from math import ceil
 import argparse
 import actionlib
@@ -197,7 +196,7 @@ class TouchSearch(object):
         self.r_tol = [10.0, 20.0, 20.0, 10.0, 15.0, 30.0, 15.0, 20.0]
         
         self.scan_steps = 10
-        self.z_min = -0.04373
+        self.z_min = -0.025415
 
         self.pcl_height = []
         self.pcl_width = []
@@ -429,10 +428,16 @@ class TouchSearch(object):
                 if self.orientation_axis == self.x_axis:
                     status = self.goto_cartesian(self.cur_x,
                                                  self.cur_y - self.finger_width,
-                                                 self.cur_z)
+                                                 self.cur_z+0.007)
                 else:
-                    status = self.goto_cartesian(self.cur_x + self.finger_width,
-                                                 self.cur_y, self.cur_z)
+                    if self.orientation_axis == self.y_axis:
+                        status = self.goto_cartesian(self.cur_x + self.finger_width,
+                                                     self.cur_y,
+                                                     self.cur_z+0.007)
+                    else:
+                        status = self.goto_cartesian(self.cur_x + self.finger_width,
+                                                     self.cur_y,
+                                                     self.cur_z)
                 if status != self.MOVE_SUCCESS:
                     return status
             else:
@@ -470,11 +475,16 @@ class TouchSearch(object):
                 if self.orientation_axis == self.x_axis:
                     status = self.goto_cartesian(self.cur_x,
                                                  self.cur_y + self.finger_width,
-                                                 self.cur_z)
+                                                 self.cur_z+0.007)
                 else:
-                    status = self.goto_cartesian(self.cur_x - self.finger_width,
-                                                 self.cur_y,
-                                                 self.cur_z)
+                    if self.orientation_axis == self.y_axis:
+                        status = self.goto_cartesian(self.cur_x - self.finger_width,
+                                                     self.cur_y,
+                                                     self.cur_z+0.007)
+                    else:
+                        status = self.goto_cartesian(self.cur_x - self.finger_width,
+                                                     self.cur_y,
+                                                     self.cur_z)
                 if status != self.MOVE_SUCCESS:
                     return status
             else:
@@ -607,6 +617,12 @@ class TouchSearch(object):
                     # this is the best case as it is a thin object and wouldnt
                     # touch more than 2 sensors at a time
                     print("best contact is touching middle inner sensors only")
+                    return self.BEST_GRASP_DEPTH
+            elif ro > 0 and lo > 0:
+                if ri == 0 and li == 0:
+                    print("Both the outer sensors are touching, must be the table or a object wider than what we can handle")
+                    return self.ZERO_TOUCH            
+                else:
                     return self.BEST_GRASP_DEPTH
             else:
                 print("try deepening the grasp from shallow")
@@ -866,23 +882,21 @@ def main():
 
     '''
     # temporary setting for quick testing for tall objects
-    ts.set_object_camera_info(-0.345994341187, -0.840587510401, -0.013662617369,
-                              ts.low_obj_height+0.1, ts.wide_obj_width-0.04)
-    '''
-
+    ts.set_object_camera_info(-0.341847607721, -0.576748373933, -0.0107231368966,
+                              0.8, ts.wide_obj_width-0.04)
+    
     '''
     # temporary setting for quick testing for short and wide objects
     ts.set_object_camera_info(-0.3379, -0.7296, ts.low_obj_height,
                               ts.low_obj_height, ts.wide_obj_width)
-    '''
 
     '''
-    # temporary setting for quick testing for short and regular width objects
     ts.set_object_camera_info(-0.3379, -0.7296, ts.low_obj_height,
                               ts.low_obj_height, ts.wide_obj_width-0.04)
-
-    ts.search_and_grasp()
     '''
+    
+    ts.search_and_grasp()
+
     rospy.spin()
 
 if __name__ == '__main__':
